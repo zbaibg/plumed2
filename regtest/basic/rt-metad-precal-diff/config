@@ -1,0 +1,8 @@
+type=make
+# Test PRECAL_DIFF functionality by running the bash test suite
+
+function plumed_regtest_before(){
+
+  # Run the PRECAL_DIFF test suite
+  ./run_precal_suite.sh > test_output 2>&1
+}
