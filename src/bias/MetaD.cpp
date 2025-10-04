@@ -420,6 +420,7 @@ private:
   std::vector<Gaussian> hills_;
   std::unique_ptr<FlexibleBin> flexbin_;
   int adaptive_;
+  bool precal_diff_;
   OFile hillsOfile_;
   std::vector<std::unique_ptr<IFile>> ifiles_;
   std::vector<std::string> ifilesnames_;
@@ -515,6 +516,7 @@ public:
   explicit MetaD(const ActionOptions&);
   void calculate() override;
   void update() override;
+  void beforeUpdate() override;
   static void registerKeywords(Keywords& keys);
   bool checkNeedsGradients()const override;
 };
@@ -566,6 +568,7 @@ void MetaD::registerKeywords(Keywords& keys) {
   keys.addFlag("NLIST",false,"Use neighbor list for kernels summation, faster but experimental");
   keys.add("optional", "NLIST_PARAMETERS","(default=6.,0.5) the two cutoff parameters for the Gaussians neighbor list");
   keys.add("optional","ADAPTIVE","use a geometric (=GEOM) or diffusion (=DIFF) based hills width scheme. Sigma is one number that has distance units or time step dimensions");
+  keys.addFlag("PRECAL_DIFF",false,"for ADAPTIVE=DIFF, pre-calculate/average sigma from t=0 before the time of UPDATE_FROM; if not set, use the original behavior updating after UPDATE_FROM");
   keys.add("optional","SIGMA_MAX","the upper bounds for the sigmas (in CV units) when using adaptive hills. Negative number means no bounds ");
   keys.add("optional","SIGMA_MIN","the lower bounds for the sigmas (in CV units) when using adaptive hills. Negative number means no bounds ");
   keys.add("optional","WALKERS_ID", "walker id");
@@ -607,6 +610,7 @@ MetaD::MetaD(const ActionOptions& ao):
   isFirstStep_(true),
   height0_(std::numeric_limits<double>::max()),
   adaptive_(FlexibleBin::none),
+  precal_diff_(false),
   grid_(false),
   wgridstride_(0),
   mw_n_(1), mw_dir_(""), mw_id_(0), mw_rstride_(1),
@@ -649,6 +653,9 @@ MetaD::MetaD(const ActionOptions& ao):
   } else {
     error("I do not know this type of adaptive scheme");
   }
+
+  // Optionally pre-calculate diffusion-based sigma from t=0 in beforeUpdate
+  parseFlag("PRECAL_DIFF",precal_diff_);
 
   parse("FMT",fmt_);
 
@@ -2242,6 +2249,13 @@ void MetaD::calculate() {
   }
 }
 
+void MetaD::beforeUpdate() {
+  if(adaptive_==FlexibleBin::diffusion && precal_diff_) {
+    // accumulate sigma statistics each step, independent of UPDATE_FROM
+    flexbin_->update(false);
+  }
+}
+
 void MetaD::update() {
   // adding hills criteria (could be more complex though)
   bool nowAddAHill;
@@ -2266,7 +2280,14 @@ void MetaD::update() {
   // if you use adaptive, call the FlexibleBin
   bool multivariate=false;
   if(adaptive_!=FlexibleBin::none) {
-    flexbin_->update(nowAddAHill);
+    if(adaptive_==FlexibleBin::diffusion) {
+      if(!precal_diff_) {
+        // original behavior: update in MetaD::update() rather than beforeUpdate()
+        flexbin_->update(nowAddAHill);
+      }
+    } else {
+      flexbin_->update(nowAddAHill);
+    }
     multivariate=true;
   }
 
