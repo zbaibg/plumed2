@@ -1,0 +1,37 @@
+# 1) 1D no-grid, legacy INTERVAL
+d1_m1_legacy: DISTANCE ATOMS=1,2
+m1_legacy: METAD ARG=d1_m1_legacy HEIGHT=1 PACE=1 SIGMA=0.2 INTERVAL=0.3,0.7 FILE=HILLS_m1_legacy UPDATE_UNTIL=2
+print ARG=d1_m1_legacy,m1_legacy.bias STRIDE=1 FILE=colvar_m1_legacy FMT=%12.6f
+DUMPFORCES ARG=d1_m1_legacy FILE=forces_m1_legacy
+
+# 2) 1D grid, legacy INTERVAL
+d1_m1g_legacy: DISTANCE ATOMS=1,2
+m1g_legacy: METAD ARG=d1_m1g_legacy HEIGHT=1 PACE=1 SIGMA=0.2 INTERVAL=0.3,0.7 FILE=HILLS_m1g_legacy GRID_MIN=0 GRID_MAX=1 GRID_BIN=50 UPDATE_UNTIL=2
+print ARG=d1_m1g_legacy,m1g_legacy.bias STRIDE=1 FILE=colvar_m1g_legacy FMT=%12.6f
+DUMPFORCES ARG=d1_m1g_legacy FILE=forces_m1g_legacy
+
+# 3) 1D no-grid, new INTERVAL_MIN/MAX
+d1_m1_new: DISTANCE ATOMS=1,2
+m1_new: METAD ARG=d1_m1_new HEIGHT=1 PACE=1 SIGMA=0.2 INTERVAL_MIN=0.3 INTERVAL_MAX=0.7 FILE=HILLS_m1_new UPDATE_UNTIL=2
+print ARG=d1_m1_new,m1_new.bias STRIDE=1 FILE=colvar_m1_new FMT=%12.6f
+DUMPFORCES ARG=d1_m1_new FILE=forces_m1_new
+
+# 4) 1D grid, new INTERVAL_MIN/MAX
+d1_m1g_new: DISTANCE ATOMS=1,2
+m1g_new: METAD ARG=d1_m1g_new HEIGHT=1 PACE=1 SIGMA=0.2 INTERVAL_MIN=0.3 INTERVAL_MAX=0.7 FILE=HILLS_m1g_new GRID_MIN=0 GRID_MAX=1 GRID_BIN=50 UPDATE_UNTIL=2
+print ARG=d1_m1g_new,m1g_new.bias STRIDE=1 FILE=colvar_m1g_new FMT=%12.6f
+DUMPFORCES ARG=d1_m1g_new FILE=forces_m1g_new
+
+# 5) 2D no-grid, new INTERVAL_MIN/MAX per-dimension
+d1_m2_new: DISTANCE ATOMS=1,2
+d2_m2_new: DISTANCE ATOMS=1,3
+m2_new: METAD ARG=d1_m2_new,d2_m2_new HEIGHT=1 PACE=1 SIGMA=0.2,0.2 INTERVAL_MIN=0.3,0.2 INTERVAL_MAX=0.7,0.8 FILE=HILLS_m2_new UPDATE_UNTIL=2
+print ARG=d1_m2_new,d2_m2_new,m2_new.bias STRIDE=1 FILE=colvar_m2_new FMT=%12.6f
+DUMPFORCES ARG=d1_m2_new,d2_m2_new FILE=forces_m2_new
+
+# 6) 2D grid, new INTERVAL_MIN/MAX per-dimension
+d1_m2g_new: DISTANCE ATOMS=1,2
+d2_m2g_new: DISTANCE ATOMS=1,3
+m2g_new: METAD ARG=d1_m2g_new,d2_m2g_new HEIGHT=1 PACE=1 SIGMA=0.2,0.2 INTERVAL_MIN=0.3,0.2 INTERVAL_MAX=0.7,0.8 FILE=HILLS_m2g_new GRID_MIN=0,0 GRID_MAX=1,1 GRID_BIN=50,50 UPDATE_UNTIL=2
+print ARG=d1_m2g_new,d2_m2g_new,m2g_new.bias STRIDE=1 FILE=colvar_m2g_new FMT=%12.6f
+DUMPFORCES ARG=d1_m2g_new,d2_m2g_new FILE=forces_m2g_new

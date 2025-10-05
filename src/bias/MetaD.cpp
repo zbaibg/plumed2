@@ -461,10 +461,15 @@ private:
   int fa_update_frequency_;
   int fa_max_stride_;
   double fa_min_acceleration_;
-  // intervals
+  // intervals (original 1D INTERVAL)
   double uppI_;
   double lowI_;
   bool doInt_;
+  // multi-dimensional intervals for INTERVAL_MIN/INTERVAL_MAX
+  std::vector<double> uppI_multi_;
+  std::vector<double> lowI_multi_;
+  bool doInt_multi_;
+  std::vector<bool> doIntDim_multi_;
   // reweighting
   bool calc_rct_;
   double reweight_factor_;
@@ -577,6 +582,8 @@ void MetaD::registerKeywords(Keywords& keys) {
   keys.add("optional","WALKERS_RSTRIDE","stride for reading hills files");
   keys.addFlag("WALKERS_MPI",false,"Switch on MPI version of multiple walkers - not compatible with WALKERS_* options other than WALKERS_DIR");
   keys.add("optional","INTERVAL","one dimensional lower and upper limits, outside the limits the system will not feel the biasing force.");
+  keys.add("optional","INTERVAL_MIN","multi dimensional lower limits, outside the limits the system will not feel the biasing force.");
+  keys.add("optional","INTERVAL_MAX","multi dimensional upper limits, outside the limits the system will not feel the biasing force.");
   keys.addFlag("FLYING_GAUSSIAN",false,"Switch on flying Gaussian method, must be used with WALKERS_MPI");
   keys.addFlag("ACCELERATION",false,"Set to TRUE if you want to compute the metadynamics acceleration factor.");
   keys.add("optional","ACCELERATION_RFILE","a data file from which the acceleration should be read at the initial step of the simulation");
@@ -627,6 +634,7 @@ MetaD::MetaD(const ActionOptions& ao):
   fa_max_stride_(0),
   fa_min_acceleration_(1.0),
   uppI_(-1), lowI_(-1), doInt_(false),
+  doInt_multi_(false),
   calc_rct_(false),
   reweight_factor_(0.0),
   rct_ustride_(1),
@@ -965,7 +973,8 @@ MetaD::MetaD(const ActionOptions& ao):
   // Flying Gaussian
   parseFlag("FLYING_GAUSSIAN", flying_);
 
-  // Inteval keyword
+  // Interval keywords
+  // Restore original 1D INTERVAL parsing (completely independent path)
   std::vector<double> tmpI(2);
   parseVector("INTERVAL",tmpI);
   if(tmpI.size()!=2&&tmpI.size()!=0) {
@@ -983,6 +992,38 @@ MetaD::MetaD(const ActionOptions& ao):
       error("INTERVAL cannot be used with periodic variables!");
     }
     doInt_=true;
+  }
+
+  // New multi-dimensional INTERVAL_{MIN,MAX} parsing (independent from INTERVAL)
+  std::vector<double> tmpImin;
+  std::vector<double> tmpImax;
+  parseVector("INTERVAL_MIN", tmpImin);
+  parseVector("INTERVAL_MAX", tmpImax);
+  if( (tmpImin.size()!=0 || tmpImax.size()!=0) ) {
+    if(tmpImin.size()!=tmpImax.size()) {
+      error("both a lower and an upper limits must be provided with INTERVAL_MIN/INTERVAL_MAX");
+    }
+    if(tmpImin.size()!=getNumberOfArguments()) {
+      error("check number of arguments of INTERVAL_MIN/INTERVAL_MAX");
+    }
+    lowI_multi_ = tmpImin;
+    uppI_multi_ = tmpImax;
+    doIntDim_multi_.assign(getNumberOfArguments(), false);
+    for(unsigned i=0; i<lowI_multi_.size(); ++i) {
+      if(uppI_multi_[i] < lowI_multi_[i]) {
+        error("The Upper limit must be greater than the Lower limit!");
+      }
+      if(getPntrToArgument(i)->isPeriodic()) {
+        error("INTERVAL_MIN/INTERVAL_MAX cannot be used with periodic variables");
+      }
+      doIntDim_multi_[i] = true;
+      doInt_multi_ = true;
+    }
+  }
+
+  // Mutual exclusion: cannot use INTERVAL together with INTERVAL_MIN/MAX
+  if(doInt_ && doInt_multi_) {
+    error("INTERVAL and INTERVAL_MIN/MAX cannot be used together");
   }
 
   parseFlag("ACCELERATION",acceleration_);
@@ -1119,6 +1160,14 @@ MetaD::MetaD(const ActionOptions& ao):
 
   if(doInt_) {
     log.printf("  Upper and Lower limits boundaries for the bias are activated at %f - %f\n", lowI_, uppI_);
+  }
+  if(doInt_multi_) {
+    log.printf("  Interval boundaries (multi-dim) for the bias are activated:\n");
+    for(unsigned i=0; i<doIntDim_multi_.size(); ++i) {
+      if(doIntDim_multi_[i]) {
+        log.printf("    CV %u: %f - %f\n", i, lowI_multi_[i], uppI_multi_[i]);
+      }
+    }
   }
 
   if(grid_) {
@@ -1585,6 +1634,16 @@ MetaD::MetaD(const ActionOptions& ao):
     hillsOfile_.addConstantField("lower_int").printField("lower_int",lowI_);
     hillsOfile_.addConstantField("upper_int").printField("upper_int",uppI_);
   }
+  if(doInt_multi_) {
+    for(unsigned i=0; i<doIntDim_multi_.size(); ++i) {
+      if(doIntDim_multi_[i]) {
+        std::string lowk = std::string("lower_int_") + getPntrToArgument(i)->getName();
+        std::string uppk = std::string("upper_int_") + getPntrToArgument(i)->getName();
+        hillsOfile_.addConstantField(lowk).printField(lowk, lowI_multi_[i]);
+        hillsOfile_.addConstantField(uppk).printField(uppk, uppI_multi_[i]);
+      }
+    }
+  }
   hillsOfile_.setHeavyFlush();
   // output periodicities of variables
   for(unsigned i=0; i<getNumberOfArguments(); ++i) {
@@ -1862,6 +1921,25 @@ std::vector<unsigned> MetaD::getGaussianSupport(const Gaussian& hill) {
       nneigh.push_back( static_cast<unsigned>(ceil(cutoff[0]/BiasGrid_->getDx()[0])) );
       return nneigh;
     }
+  } else if(doInt_multi_) {
+    // multi-dim: if any active dim touches bound, update entire grid
+    bool touches_boundary = false;
+    for(unsigned i=0; i<ncv; i++) {
+      if(i < doIntDim_multi_.size() && doIntDim_multi_[i]) {
+        if(hill.center[i] + cutoff[i] > uppI_multi_[i] || hill.center[i] - cutoff[i] < lowI_multi_[i]) {
+          touches_boundary = true;
+          break;
+        }
+      }
+    }
+    if(touches_boundary) {
+      return BiasGrid_->getNbin();
+    } else {
+      for(unsigned i=0; i<ncv; i++) {
+        nneigh.push_back( static_cast<unsigned>(ceil(cutoff[i]/BiasGrid_->getDx()[i])) );
+      }
+      return nneigh;
+    }
   } else {
     for(unsigned i=0; i<ncv; i++) {
       nneigh.push_back( static_cast<unsigned>(ceil(cutoff[i]/BiasGrid_->getDx()[i])) );
@@ -2003,8 +2081,9 @@ double MetaD::evaluateGaussian(const std::vector<double>& cv, const Gaussian& hi
   // I use a pointer here because cv is const (and should be const)
   // but when using doInt it is easier to locally replace cv[0] with
   // the upper/lower limit in case it is out of range
-  double tmpcv[1];
   const double *pcv=NULL; // pointer to cv
+  double tmpcv[1];
+  std::vector<double> tmpcvv;
   if(ncv>0) {
     pcv=&cv[0];
   }
@@ -2018,6 +2097,15 @@ double MetaD::evaluateGaussian(const std::vector<double>& cv, const Gaussian& hi
       tmpcv[0]=uppI_;
     }
     pcv=&(tmpcv[0]);
+  } else if(doInt_multi_) {
+    tmpcvv=cv;
+    for(unsigned i=0; i<ncv; ++i) {
+      if(i<doIntDim_multi_.size() && doIntDim_multi_[i]) {
+        if(cv[i] < lowI_multi_[i]) tmpcvv[i] = lowI_multi_[i];
+        if(cv[i] > uppI_multi_[i]) tmpcvv[i] = uppI_multi_[i];
+      }
+    }
+    pcv=&(tmpcvv[0]);
   }
 
   double dp2=0.0;
@@ -2066,6 +2154,7 @@ double MetaD::evaluateGaussianAndDerivatives(const std::vector<double>& cv, cons
   // the upper/lower limit in case it is out of range
   const double *pcv=NULL; // pointer to cv
   double tmpcv[1]; // tmp array with cv (to be used with doInt_)
+  std::vector<double> tmpcvv;
   if(ncv>0) {
     pcv=&cv[0];
   }
@@ -2079,12 +2168,29 @@ double MetaD::evaluateGaussianAndDerivatives(const std::vector<double>& cv, cons
       tmpcv[0]=uppI_;
     }
     pcv=&(tmpcv[0]);
+  } else if(doInt_multi_) {
+    tmpcvv=cv;
+    for(unsigned i=0; i<ncv; ++i) {
+      if(i<doIntDim_multi_.size() && doIntDim_multi_[i]) {
+        if(cv[i] < lowI_multi_[i]) tmpcvv[i] = lowI_multi_[i];
+        if(cv[i] > uppI_multi_[i]) tmpcvv[i] = uppI_multi_[i];
+      }
+    }
+    pcv=&(tmpcvv[0]);
   }
 
   bool int_der=false;
+  std::vector<bool> out_dim; // for multi-dimensional interval: per-dimension outside flags
   if(doInt_) {
-    if(cv[0]<lowI_ || cv[0]>uppI_) {
-      int_der=true;
+    if(cv[0]<lowI_ || cv[0]>uppI_) { 
+      int_der=true; 
+    }
+  } else if(doInt_multi_) {
+    out_dim.assign(ncv,false);
+    for(unsigned i=0; i<ncv; ++i) {
+      if(i<doIntDim_multi_.size() && doIntDim_multi_[i]) {
+        if(cv[i] < lowI_multi_[i] || cv[i] > uppI_multi_[i]) { out_dim[i]=true; }
+      }
     }
   }
 
@@ -2113,7 +2219,19 @@ double MetaD::evaluateGaussianAndDerivatives(const std::vector<double>& cv, cons
     }
     if(dp2<dp2cutoff) {
       bias=hill.height*std::exp(-dp2);
-      if(!int_der) {
+      if(doInt_multi_) {
+        for(unsigned i=0; i<ncv; i++) {
+          double tmp=0.0;
+          for(unsigned j=0; j<ncv; j++) {
+            tmp += dp_[j]*mymatrix(i,j)*bias;
+          }
+          if(!(i<out_dim.size() && out_dim[i])) {
+            der[i]-=tmp*stretchA;
+          } else {
+            der[i]=0.;
+          }
+        }
+      } else if(!int_der) {
         for(unsigned i=0; i<ncv; i++) {
           double tmp=0.0;
           for(unsigned j=0; j<ncv; j++) {
@@ -2136,7 +2254,15 @@ double MetaD::evaluateGaussianAndDerivatives(const std::vector<double>& cv, cons
     dp2*=0.5;
     if(dp2<dp2cutoff) {
       bias=hill.height*std::exp(-dp2);
-      if(!int_der) {
+      if(doInt_multi_) {
+        for(unsigned i=0; i<ncv; i++) {
+          if(!(i<out_dim.size() && out_dim[i])) {
+            der[i]-=bias*dp_[i]*hill.invsigma[i]*stretchA;
+          } else {
+            der[i]=0.;
+          }
+        }
+      } else if(!int_der) {
         for(unsigned i=0; i<ncv; i++) {
           der[i]-=bias*dp_[i]*hill.invsigma[i]*stretchA;
         }
@@ -2530,11 +2656,19 @@ bool MetaD::scanOneHill(IFile* ifile, std::vector<Value>& tmpvalues, std::vector
     if(ifile->FieldExist("clock")) {
       ifile->scanField("clock",dummy);
     }
-    if(ifile->FieldExist("lower_int")) {
-      ifile->scanField("lower_int",dummy);
+    // Read legacy INTERVAL limits if present (ignore values)
+    if(ifile->FieldExist("lower_int")) { 
+      ifile->scanField("lower_int",dummy); 
     }
     if(ifile->FieldExist("upper_int")) {
-      ifile->scanField("upper_int",dummy);
+       ifile->scanField("upper_int",dummy); 
+      }
+    // Read any per-dimension interval constants for INTERVAL_MIN/MAX if present (ignore values)
+    for(unsigned i=0; i<ncv; ++i) {
+      std::string lowk = std::string("lower_int_") + getPntrToArgument(i)->getName();
+      std::string uppk = std::string("upper_int_") + getPntrToArgument(i)->getName();
+      if(ifile->FieldExist(lowk)) { ifile->scanField(lowk,dummy); }
+      if(ifile->FieldExist(uppk)) { ifile->scanField(uppk,dummy); }
     }
     ifile->scanField();
     return true;
